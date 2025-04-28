@@ -40,6 +40,3 @@ end
     Vold=V;
     Pold=P;
 end
-         
-  
- 
