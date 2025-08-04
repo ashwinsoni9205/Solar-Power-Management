@@ -1,15 +1,37 @@
 #include "F28x_Project.h"      // Contains basic device definitions
 #include "F2837xD_Examples.h"  // Changed from F2837xS_Examples.h to F2837xD_Examples.h
-
 //#define LED_GPIO 4             // LED on GPIO4
 
+
+__interrupt void epwm2_isr(void)
+{
+    GpioDataRegs.GPBSET.bit.GPIO61 = 1;      // Set GPIO61 HIGH at TBCTR=0 (SOC event)
+    EPwm2Regs.ETCLR.bit.INT = 1;             // Clear interrupt flag
+    PieCtrlRegs.PIEACK.all = PIEACK_GROUP3;  // Acknowledge PIE group 3
+}
+
+void test_pin_setup() // Setting a gpio pin for testing purposes to see time taken by certain function or block
+{
+    // using gpio 61 (J2 19);
+    EALLOW;
+    GpioCtrlRegs.GPBMUX2.bit.GPIO61 = 0;     // Set as GPIO function (not peripheral)
+    GpioCtrlRegs.GPBDIR.bit.GPIO61 = 1;      // Set as output
+    GpioDataRegs.GPBCLEAR.bit.GPIO61 = 1;    // Start LOW
+    EPwm2Regs.ETSEL.bit.INTEN = 1;         // EPWM2 INT enable
+    EPwm2Regs.ETSEL.bit.INTSEL = 1;        // INT on counter=zero
+    EPwm2Regs.ETPS.bit.INTPRD = 1;         // INT on first event
+    PieVectTable.EPWM2_INT = &epwm2_isr;
+    PieCtrlRegs.PIEIER3.bit.INTx2 = 1;     // Enable PIE group 3, INT2 (EPWM2)
+    IER |= M_INT3;                         // Enable group 3 interrupts
+    // EINT;                                  // Global interrupt enable already done in interrupt setup function;
+    EDIS;
+}
 void epwm_init() // function to initialize epwm port;
 {
     // using EPWM2A for boost converter operation;
-    // EPWM2A : J8 80 pin on the launchpad;
     EALLOW;
 
-    GpioCtrlRegs.GPADIR.bit.GPIO2 = 1; // configuring gpio2(J8 80) as output;
+    GpioCtrlRegs.GPADIR.bit.GPIO2 = 1; // configuring gpio2(J4 38) as output;
     GpioCtrlRegs.GPAMUX1.bit.GPIO2 = 1; // selecting EPWM2A instead of GPIO2 on J4 38 pin;
     //Setting Epwm2 clk = 100MHz, so count till 10,000(0 to 9999) for 10kHz clock;
     EPwm2Regs.TBCTL.bit.CTRMODE = 0; //upcount mode on epwm2;
@@ -35,12 +57,12 @@ void epwm_init() // function to initialize epwm port;
 }
 void adc_init() // function to initialize adc ports;
 {
-    //Using ADCINA2 pin(J7 pin 64) for adc input;
     EALLOW;
 
+    // ADCA for ipv measurement;
     AdcaRegs.ADCCTL2.bit.SIGNALMODE = 0; // for single-ended adc mode;
     AdcaRegs.ADCCTL2.bit.RESOLUTION = 0; // selecting 12-bit resolution for adc;
-    AdcaRegs.ADCCTL2.bit.PRESCALE = 6; // Adc_clk = SYSCLK/4 = 50MHz/4 = 12.5MHz recommended (was 12 for F28377S)
+    AdcaRegs.ADCCTL2.bit.PRESCALE = 14; // Adc_clk = SYSCLK/8 = 200MHz/8 = 25MHz;
 
     AdcaRegs.ADCCTL1.bit.ADCPWDNZ = 1;  //Powering up the adc;
     volatile uint32_t i;
@@ -48,27 +70,31 @@ void adc_init() // function to initialize adc ports;
 
     //We have multiple SOCs like SOC0,SOC1,... can use any of them with epwms; Using SOC0 for now;
     AdcaRegs.ADCSOC0CTL.bit.TRIGSEL = 7; //Selecting the triggering source for SOC0, which is epwm2,ADCSOCA as set up above;
-    AdcaRegs.ADCSOC0CTL.bit.CHSEL = 2; //Selecting ADCIN3 channel for SOC0; //ADCINA2 taking 3.3V ref but ADCINA3 is taking 3V as ref.
-    AdcaRegs.ADCSOC0CTL.bit.ACQPS = 20; // Aquisition Prescale of 20, so sample will be hold for 20 adc cycles for proper input;
+    AdcaRegs.ADCSOC0CTL.bit.CHSEL = 2; // Selecting ADCIN2 in our case will be ADCINA2(J3 29) as SOCA is set up;
+    AdcaRegs.ADCSOC0CTL.bit.ACQPS = 99; // Aquisition Prescale of 99, so sample will be hold for (99+1 = 99) system clock cycles
+    // i.e. 500ns for proper input;
 
     // Now Enabling ADC interrupt 1 (ADCINT1) after conversion of SOC0, to do calculation with the converted value;
     AdcaRegs.ADCINTSEL1N2.bit.INT1SEL = 0;  // Event EOC0 will trigger ADCINT1 interrupt;
     AdcaRegs.ADCINTSEL1N2.bit.INT1E = 1;    // To enable Enable ADCINT1;
     AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;  // Clear interrupt flag
 
-    EDIS;
+    //ADC B for iL measurement;
 
+    EDIS;
 }
 
 __interrupt void adca1_isr(void)
 {
     Uint16 result = AdcaResultRegs.ADCRESULT0;  // Reading the result from adc0 result register;
     Uint16 new_cmpa = (Uint32)result * 9999 / 4095;
-    // Limiting new_cmpa within TBPRD range to avoid PWM errors
-    if(new_cmpa > 9999) new_cmpa = 9999;
-    EPwm2Regs.CMPA.bit.CMPA = new_cmpa;   // Updating the duty cycle, this will go in the shodow reg firstly;
+    EPwm2Regs.CMPA.bit.CMPA = new_cmpa;         // Updating the duty cycle, this will go in the shodow reg firstly;
+
     AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;      // To Clear ADC interrupt flag;
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;     // Acknowledge PIE group 1;
+
+
+    GpioDataRegs.GPBCLEAR.bit.GPIO61 = 1;      //Clearing test gpio pin after eoc;
 }
 
 void setup_interrupts()
@@ -77,7 +103,7 @@ void setup_interrupts()
     PieCtrlRegs.PIECTRL.bit.ENPIE = 1;         // Enable PIE block
     PieVectTable.ADCA1_INT = &adca1_isr;       // Map out own custom written ISR to the ADCA1_INT interrupt in pievect table;
     PieCtrlRegs.PIEIER1.bit.INTx1 = 1;         // Enable ADCINT1 in PIE group 1
-    IER |= 1;                             // Enable group 1 interrupts
+    IER |= 1;                                  // Enable group 1 interrupts
     EINT;                                      // Global interrupt enable
     EDIS;
 }
@@ -91,6 +117,7 @@ void main(void)
     epwm_init();
     adc_init();
     setup_interrupts();
+    test_pin_setup();
 
     // Enable writing to protected registers
     EALLOW;
