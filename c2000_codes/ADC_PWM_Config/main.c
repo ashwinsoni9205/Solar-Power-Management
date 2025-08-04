@@ -3,7 +3,7 @@
 //#define LED_GPIO 4             // LED on GPIO4
 
 
-__interrupt void epwm2_isr(void)
+__interrupt void epwm2_isr(void) // generating interrupt at start to set the test pin high for timing measurements;
 {
     GpioDataRegs.GPBSET.bit.GPIO61 = 1;      // Set GPIO61 HIGH at TBCTR=0 (SOC event)
     EPwm2Regs.ETCLR.bit.INT = 1;             // Clear interrupt flag
@@ -68,9 +68,16 @@ void adc_init() // function to initialize adc ports;
     volatile uint32_t i;
     for(i = 0; i < 5000; i++) { } // simple delay loop for getting adc turned on properly;
 
-    //We have multiple SOCs like SOC0,SOC1,... can use any of them with epwms; Using SOC0 for now;
-    AdcaRegs.ADCSOC0CTL.bit.TRIGSEL = 7; //Selecting the triggering source for SOC0, which is epwm2,ADCSOCA as set up above;
+    // We have multiple SOCs like SOC0,SOC1,... can use any of them with epwms; Using SOC0 for now;
+    // Will be triggering all adc soc events by epwm2's ADCSOCA pulse;
+    AdcaRegs.ADCSOC0CTL.bit.TRIGSEL = 7; // Selecting the triggering source for SOC0 of ADC A, which is epwm2,ADCSOCA as set up above;
+    AdcbRegs.ADCSOC0CTL.bit.TRIGSEL = 7; // Same triggering source for ADC B SOC0;
+    AdccRegs.ADCSOC0CTL.bit.TRIGSEL = 7; // Same triggering source for ADC C SOC0;
+    
+    //Selecting channel for each ADC:
     AdcaRegs.ADCSOC0CTL.bit.CHSEL = 2; // Selecting ADCIN2 in our case will be ADCINA2(J3 29) as SOCA is set up;
+    
+    //Setting Acquisition prescalar for each:
     AdcaRegs.ADCSOC0CTL.bit.ACQPS = 99; // Aquisition Prescale of 99, so sample will be hold for (99+1 = 99) system clock cycles
     // i.e. 500ns for proper input;
 
@@ -95,6 +102,15 @@ __interrupt void adca1_isr(void)
 
 
     GpioDataRegs.GPBCLEAR.bit.GPIO61 = 1;      //Clearing test gpio pin after eoc;
+}
+
+void picontrol(Uint32 Vref)
+{
+    Uint16 Ipvbit = AdcaResultRegs.ADCRESULT0; // Ipv value, at ADCINA2; (J3 29)
+    Uint16 ILbit = AdcbResultRegs.ADCRESULT0; // IL value, at ADCINB2; (J3 28)
+    Uint16 Vpvbit = AdccResultRegs.ADCRESULT0;
+    
+    
 }
 
 void setup_interrupts()
