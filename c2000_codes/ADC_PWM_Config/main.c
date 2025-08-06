@@ -159,6 +159,17 @@ void adcC_init() // Function to initialize ADCC for voltage sensor input (ADCINC
     EDIS;
 }
 
+void mppt()
+{
+    // Fetch ADC results from SOC0 of ADC A, B, and C using 32-bit variables
+    Uint32 Ipvbit = (Uint32)AdcaResultRegs.ADCRESULT0;  // Ipv from ADCINA2 (J3 29)
+    Uint32 ILbit  = (Uint32)AdcbResultRegs.ADCRESULT0;  // IL from ADCINB2 (J3 28)
+    Uint32 Vpvbit = (Uint32)AdccResultRegs.ADCRESULT0;  // Vpv from ADCINC2 (J3 27)
+
+    // Placeholder for MPPT logic
+    
+}
+
 __interrupt void adca1_isr(void)
 {
     while(AdcbRegs.ADCINTFLG.bit.ADCINT1 == 0); // wait till ADC_B_INT1 interrupt is not triggered, this is triggered
@@ -176,10 +187,7 @@ __interrupt void adca1_isr(void)
 
 void picontrol(void)
 {
-    Uint16 Ipvbit = AdcaResultRegs.ADCRESULT0; // Ipv value, at ADCINA2; (J3 29)
-    Uint16 ILbit = AdcbResultRegs.ADCRESULT0; // IL value, at ADCINB2; (J3 28)
-    Uint16 Vpvbit = AdccResultRegs.ADCRESULT0;
-
+    
 
 
 
