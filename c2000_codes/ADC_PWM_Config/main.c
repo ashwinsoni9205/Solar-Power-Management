@@ -2,6 +2,7 @@
 #include "F2837xD_Examples.h"  // Changed from F2837xS_Examples.h to F2837xD_Examples.h
 //#define LED_GPIO 4             // LED on GPIO4
 
+Uint32 SCALINGFACTOR
 
 __interrupt void epwm2_isr(void) // generating interrupt at start to set the test pin high for timing measurements;
 {
@@ -26,7 +27,7 @@ void test_pin_setup() // Setting a gpio pin for testing purposes to see time tak
     // EINT;                                  // Global interrupt enable already done in interrupt setup function;
     EDIS;
 }
-void epwm_init() // function to initialize epwm port;
+void epwm2_init() // function to initialize epwm port;
 {
     // using EPWM2A for boost converter operation;
     EALLOW;
@@ -55,7 +56,7 @@ void epwm_init() // function to initialize epwm port;
 
     EDIS;
 }
-void adc_init() // function to initialize adc ports;
+void adcA_init() // function to initialize adc ports;
 {
     EALLOW;
 
@@ -71,12 +72,10 @@ void adc_init() // function to initialize adc ports;
     // We have multiple SOCs like SOC0,SOC1,... can use any of them with epwms; Using SOC0 for now;
     // Will be triggering all adc soc events by epwm2's ADCSOCA pulse;
     AdcaRegs.ADCSOC0CTL.bit.TRIGSEL = 7; // Selecting the triggering source for SOC0 of ADC A, which is epwm2,ADCSOCA as set up above;
-    AdcbRegs.ADCSOC0CTL.bit.TRIGSEL = 7; // Same triggering source for ADC B SOC0;
-    AdccRegs.ADCSOC0CTL.bit.TRIGSEL = 7; // Same triggering source for ADC C SOC0;
-    
+
     //Selecting channel for each ADC:
     AdcaRegs.ADCSOC0CTL.bit.CHSEL = 2; // Selecting ADCIN2 in our case will be ADCINA2(J3 29) as SOCA is set up;
-    
+
     //Setting Acquisition prescalar for each:
     AdcaRegs.ADCSOC0CTL.bit.ACQPS = 99; // Aquisition Prescale of 99, so sample will be hold for (99+1 = 99) system clock cycles
     // i.e. 500ns for proper input;
@@ -109,8 +108,10 @@ void picontrol(Uint32 Vref)
     Uint16 Ipvbit = AdcaResultRegs.ADCRESULT0; // Ipv value, at ADCINA2; (J3 29)
     Uint16 ILbit = AdcbResultRegs.ADCRESULT0; // IL value, at ADCINB2; (J3 28)
     Uint16 Vpvbit = AdccResultRegs.ADCRESULT0;
-    
-    
+
+
+
+
 }
 
 void setup_interrupts()
@@ -130,8 +131,8 @@ void main(void)
     InitPieCtrl();
     InitPieVectTable();
 
-    epwm_init();
-    adc_init();
+    epwm2_init();
+    adcA_init();
     setup_interrupts();
     test_pin_setup();
 
