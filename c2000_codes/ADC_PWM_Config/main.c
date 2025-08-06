@@ -132,6 +132,32 @@ void adcB_init()
     EDIS;
 }
 
+void adcC_init() // Function to initialize ADCC for voltage sensor input (ADCINC2)
+{
+    EALLOW;
+
+    // ADCC for voltage sensor measurement;
+    AdccRegs.ADCCTL2.bit.SIGNALMODE = 0;  // Single-ended mode
+    AdccRegs.ADCCTL2.bit.RESOLUTION = 0;  // 12-bit resolution
+    AdccRegs.ADCCTL2.bit.PRESCALE = 14;   // ADC clock = SYSCLK / 8 = 25MHz
+
+    AdccRegs.ADCCTL1.bit.ADCPWDNZ = 1;    // Powering up ADCC
+    volatile uint32_t i;
+    for(i = 0; i < 5000; i++) { }         // Stabilization delay
+
+    // Configure SOC0 of ADCC to be triggered by EPWM2 SOCA event
+    AdccRegs.ADCSOC0CTL.bit.TRIGSEL = 7;  // Trigger source: EPWM2 SOCA
+    AdccRegs.ADCSOC0CTL.bit.CHSEL = 2;    // Channel: ADCINC2 (C2)
+    AdccRegs.ADCSOC0CTL.bit.ACQPS = 99;   // Acquisition window: 100 SYSCLK cycles (500ns)
+
+    // Configure ADCINT1 for ADCC
+    AdccRegs.ADCINTSEL1N2.bit.INT1SEL = 0;  // Interrupt on EOC0 (End of SOC0)
+    AdccRegs.ADCINTSEL1N2.bit.INT1E = 1;    // Enable ADCINT1
+    AdccRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;  // Clear ADCINT1 flag
+
+    EDIS;
+}
+
 __interrupt void adca1_isr(void)
 {
     while(AdcbRegs)
