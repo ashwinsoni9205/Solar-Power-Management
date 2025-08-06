@@ -1,16 +1,17 @@
 #include "F28x_Project.h"                    // Contains basic device definitions
 #include "F2837xD_Examples.h"                // Changed from F2837xS_Examples.h to F2837xD_Examples.h
+#include <stdint.h>
 //#define LED_GPIO 4                         // LED on GPIO4
 
 
 //-------- Defining global variables --------//
 
-uint32_t SCALINGFACTOR = 100000;             // For preventing floating numbers, scaling all the values for calculation.
+uint16_t SCALINGFACTOR = 100000;             // For preventing floating numbers, scaling all the values for calculation.
 volatile uint32_t Ipv = 0;
 volatile uint32_t Vpv = 0;
 volatile uint32_t Vref = 69;                 // initially Vref will be Vpv at mppt, i.e. 69;
 volatile uint32_t IL = 0;
-volatile uint32_t ILref = 0;
+volatile uint32_t error_iL_int = 0;          // intergral current error, need to be preserved for accumulation overtime;
 
 //--------       Test pin set        --------//
 
@@ -37,7 +38,7 @@ void test_pin_setup() // Setting a gpio pin for testing purposes to see time tak
     EDIS;
 }
 
-//---- Function to initialize epwm port; ----//
+//-----   Function to initialize epwm   -----//
 
 void epwm2_init()
 {
@@ -68,11 +69,30 @@ void epwm2_init()
 
     EDIS;
 }
-void adcA_init() // function to initialize adc ports;
+
+//-----    Interrupt setup function    -----//
+
+void setup_interrupts()
 {
     EALLOW;
+    PieCtrlRegs.PIECTRL.bit.ENPIE = 1;         // Enable PIE block
+    PieVectTable.ADCA1_INT = &adca1_isr;       // Map out own custom written ISR to the ADCA1_INT interrupt in pievect table;
+    PieCtrlRegs.PIEIER1.bit.INTx1 = 1;         // Enable ADCINT1 in PIE group 1
+    IER |= 1;                                  // Enable group 1 interrupts
+    EINT;                                      // Global interrupt enable
+    EDIS;
+}
 
-    // ADCA for ipv measurement;
+
+//-----    ADC initialization functions    -----//
+
+void adcA_init() // function to initialize adcA ports;
+{
+    // ADCA for ipv measurement
+    // Using SOC0 event of ADC A for ipv measurement
+
+    EALLOW;
+
     AdcaRegs.ADCCTL2.bit.SIGNALMODE = 0; // for single-ended adc mode;
     AdcaRegs.ADCCTL2.bit.RESOLUTION = 0; // selecting 12-bit resolution for adc;
     AdcaRegs.ADCCTL2.bit.PRESCALE = 14; // Adc_clk = SYSCLK/8 = 200MHz/8 = 25MHz;
@@ -102,8 +122,8 @@ void adcA_init() // function to initialize adc ports;
 
 void adcB_init()
 {
-    // ADC B for iL measurement;
-    // Using SOC0 event of ADC B for iL measurement;
+    // ADC B for iL measurement
+    // Using SOC0 event of ADC B for iL measurement
 
     EALLOW;
 
@@ -118,14 +138,12 @@ void adcB_init()
     AdcbRegs.ADCSOC0CTL.bit.TRIGSEL = 7; // Selecting the triggering source for SOC0 of ADC B,
                                          // which is epwm2,ADCSOCA as set in epwm2_init() function;
 
-    //Selecting channel for each ADC:
     AdcbRegs.ADCSOC0CTL.bit.CHSEL = 2; // Selecting ADCIN2 in our case will be ADCINB2(J3 28) for adc B;
 
-    //Setting Acquisition prescalar for each:
     AdcbRegs.ADCSOC0CTL.bit.ACQPS = 99; // Aquisition Prescale of 99, so sample will be hold for (99+1 = 99) system clock cycles
     // i.e. 500ns for proper input;
 
-    // Now Enabling ADC interrupt 1 (ADCINT1) after conversion of SOC0,i.e. at EOC0 event, to do confirm the completion of conversion;
+    // Now Enabling ADC interrupt 1 (ADCINT1) after conversion of SOC0,i.e. at EOC0 event, to confirm the completion of conversion
     AdcbRegs.ADCINTSEL1N2.bit.INT1SEL = 0;  // Event EOC0 will trigger ADCINT1 interrupt;
     AdcbRegs.ADCINTSEL1N2.bit.INT1E = 1;    // To enable Enable ADCINT1;
     AdcbRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;  // Clear interrupt flag;
@@ -159,6 +177,8 @@ void adcC_init() // Function to initialize ADCC for voltage sensor input (ADCINC
     EDIS;
 }
 
+//-----    mppt function    -----//
+
 void mppt()
 {
     // Fetch ADC results from SOC0 of ADC A, B, and C using 32-bit variables
@@ -167,10 +187,27 @@ void mppt()
     Uint32 Vpvbit = (Uint32)AdccResultRegs.ADCRESULT0;  // Vpv from ADCINC2 (J3 27)
 
     // Placeholder for MPPT logic
-    
+
 }
 
-__interrupt void adca1_isr(void)
+//-----    pi control function    -----//
+
+void pi_control(void)
+{
+    // All values recieved are scaled by SCALINGFACTOR
+    uint16_t kp = 50000;                        // 0.5*100000;
+    uint16_t ki = 200000;                       // 2*100000;
+    uint32_t error_iL = ((Vpv*Ipv)/Vref) - IL;  // error_i = ILref - IL;
+    error_iL_int += (error_iL/10000);           // error_iL_int += (error_iL*Ts); Ts = 1e-4;
+    uint32_t duty = (((kp*error_iL) + (ki*error_iL_int)) * 9999) / 100000; // Scaled value of Duty cycle;
+    // final_duty = duty * 9999 / 100000;
+
+    EPwm2Regs.CMPA.bit.CMPA = duty; // Updating value in CMPA shadow register, this value will be used in next counting cycle;
+}
+
+//-----    ADCA EOC0 ISR function    -----//
+
+__interrupt void adca1_isr(void) // main calculations is done in this ISR;
 {
     while(AdcbRegs.ADCINTFLG.bit.ADCINT1 == 0); // wait till ADC_B_INT1 interrupt is not triggered, this is triggered
                                                 // by our EOC0 event, i.e. when adc B has done its conversion;
@@ -180,28 +217,9 @@ __interrupt void adca1_isr(void)
                                                 // by our EOC0 event, i.e. when adc C has done its conversion;
     AdccRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;      // Clear ADCINT1 flag for adc C;
 
-    mppt(); // Calling mppt function to give Vref;
+    mppt();                                     // Calling mppt function to give Vref; Also calculating values of Vpv,Ipv,IL in this only;
 
-    picontrol(); // Calling pi_control function to set req. Duty for pwm pulse;
-}
-
-void picontrol(void)
-{
-    
-
-
-
-}
-
-void setup_interrupts()
-{
-    EALLOW;
-    PieCtrlRegs.PIECTRL.bit.ENPIE = 1;         // Enable PIE block
-    PieVectTable.ADCA1_INT = &adca1_isr;       // Map out own custom written ISR to the ADCA1_INT interrupt in pievect table;
-    PieCtrlRegs.PIEIER1.bit.INTx1 = 1;         // Enable ADCINT1 in PIE group 1
-    IER |= 1;                                  // Enable group 1 interrupts
-    EINT;                                      // Global interrupt enable
-    EDIS;
+    pi_control();                                // Calling pi_control function to set req. Duty for pwm pulse;
 }
 
 void main(void)
@@ -212,6 +230,8 @@ void main(void)
 
     epwm2_init();
     adcA_init();
+    adcB_init();
+    adcC_init();
     setup_interrupts();
     test_pin_setup();
 
