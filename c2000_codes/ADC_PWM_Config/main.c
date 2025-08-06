@@ -99,6 +99,7 @@ void adcA_init() // function to initialize adc ports;
 
     EDIS;
 }
+
 void adcB_init()
 {
     // ADC B for iL measurement;
@@ -124,10 +125,10 @@ void adcB_init()
     AdcbRegs.ADCSOC0CTL.bit.ACQPS = 99; // Aquisition Prescale of 99, so sample will be hold for (99+1 = 99) system clock cycles
     // i.e. 500ns for proper input;
 
-    // Now Enabling ADC interrupt 1 (ADCINT1) after conversion of SOC0, to do calculation with the converted value;
+    // Now Enabling ADC interrupt 1 (ADCINT1) after conversion of SOC0,i.e. at EOC0 event, to do confirm the completion of conversion;
     AdcbRegs.ADCINTSEL1N2.bit.INT1SEL = 0;  // Event EOC0 will trigger ADCINT1 interrupt;
     AdcbRegs.ADCINTSEL1N2.bit.INT1E = 1;    // To enable Enable ADCINT1;
-    AdcbRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;  // Clear interrupt flag
+    AdcbRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;  // Clear interrupt flag;
 
     EDIS;
 }
@@ -147,7 +148,7 @@ void adcC_init() // Function to initialize ADCC for voltage sensor input (ADCINC
 
     // Configure SOC0 of ADCC to be triggered by EPWM2 SOCA event
     AdccRegs.ADCSOC0CTL.bit.TRIGSEL = 7;  // Trigger source: EPWM2 SOCA
-    AdccRegs.ADCSOC0CTL.bit.CHSEL = 2;    // Channel: ADCINC2 (C2)
+    AdccRegs.ADCSOC0CTL.bit.CHSEL = 2;    // Channel: ADCINC2 (J3 27);
     AdccRegs.ADCSOC0CTL.bit.ACQPS = 99;   // Acquisition window: 100 SYSCLK cycles (500ns)
 
     // Configure ADCINT1 for ADCC
@@ -160,7 +161,17 @@ void adcC_init() // Function to initialize ADCC for voltage sensor input (ADCINC
 
 __interrupt void adca1_isr(void)
 {
-    while(AdcbRegs)
+    while(AdcbRegs.ADCINTFLG.bit.ADCINT1 == 0); // wait till ADC_B_INT1 interrupt is not triggered, this is triggered
+                                                // by our EOC0 event, i.e. when adc B has done its conversion;
+    AdcbRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;      // Clear ADCINT1 flag for adc B;
+
+    while(AdccRegs.ADCINTFLG.bit.ADCINT1 == 0); // wait till ADC_C_INT1 interrupt is not triggered, this is triggered
+                                                // by our EOC0 event, i.e. when adc C has done its conversion;
+    AdccRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;      // Clear ADCINT1 flag for adc C;
+
+    mppt(); // Calling mppt function to give Vref;
+
+    picontrol(); // Calling pi_control function to set req. Duty for pwm pulse;
 }
 
 void picontrol(void)
