@@ -1,16 +1,25 @@
-#include "F28x_Project.h"      // Contains basic device definitions
-#include "F2837xD_Examples.h"  // Changed from F2837xS_Examples.h to F2837xD_Examples.h
-//#define LED_GPIO 4             // LED on GPIO4
+#include "F28x_Project.h"                    // Contains basic device definitions
+#include "F2837xD_Examples.h"                // Changed from F2837xS_Examples.h to F2837xD_Examples.h
+//#define LED_GPIO 4                         // LED on GPIO4
 
-Uint32 SCALINGFACTOR
 
-__interrupt void epwm2_isr(void) // generating interrupt at start to set the test pin high for timing measurements;
+//-------- Defining global variables --------//
+
+uint32_t SCALINGFACTOR = 100000;             // For preventing floating numbers, scaling all the values for calculation.
+volatile uint32_t Ipv = 0;
+volatile uint32_t Vpv = 0;
+volatile uint32_t Vref = 69;                 // initially Vref will be Vpv at mppt, i.e. 69;
+volatile uint32_t IL = 0;
+volatile uint32_t ILref = 0;
+
+//--------       Test pin set        --------//
+
+__interrupt void epwm2_isr(void)             // generating interrupt at start to set the test pin high for timing measurements;
 {
     GpioDataRegs.GPBSET.bit.GPIO61 = 1;      // Set GPIO61 HIGH at TBCTR=0 (SOC event)
     EPwm2Regs.ETCLR.bit.INT = 1;             // Clear interrupt flag
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP3;  // Acknowledge PIE group 3
 }
-
 void test_pin_setup() // Setting a gpio pin for testing purposes to see time taken by certain function or block
 {
     // using gpio 61 (J2 19);
@@ -18,16 +27,19 @@ void test_pin_setup() // Setting a gpio pin for testing purposes to see time tak
     GpioCtrlRegs.GPBMUX2.bit.GPIO61 = 0;     // Set as GPIO function (not peripheral)
     GpioCtrlRegs.GPBDIR.bit.GPIO61 = 1;      // Set as output
     GpioDataRegs.GPBCLEAR.bit.GPIO61 = 1;    // Start LOW
-    EPwm2Regs.ETSEL.bit.INTEN = 1;         // EPWM2 INT enable
-    EPwm2Regs.ETSEL.bit.INTSEL = 1;        // INT on counter=zero
-    EPwm2Regs.ETPS.bit.INTPRD = 1;         // INT on first event
+    EPwm2Regs.ETSEL.bit.INTEN = 1;           // EPWM2 INT enable
+    EPwm2Regs.ETSEL.bit.INTSEL = 1;          // INT on counter=zero
+    EPwm2Regs.ETPS.bit.INTPRD = 1;           // INT on first event
     PieVectTable.EPWM2_INT = &epwm2_isr;
-    PieCtrlRegs.PIEIER3.bit.INTx2 = 1;     // Enable PIE group 3, INT2 (EPWM2)
-    IER |= M_INT3;                         // Enable group 3 interrupts
-    // EINT;                                  // Global interrupt enable already done in interrupt setup function;
+    PieCtrlRegs.PIEIER3.bit.INTx2 = 1;       // Enable PIE group 3, INT2 (EPWM2)
+    IER |= M_INT3;                           // Enable group 3 interrupts
+    // EINT;                                 // Global interrupt enable already done in interrupt setup function;
     EDIS;
 }
-void epwm2_init() // function to initialize epwm port;
+
+//---- Function to initialize epwm port; ----//
+
+void epwm2_init()
 {
     // using EPWM2A for boost converter operation;
     EALLOW;
@@ -74,7 +86,7 @@ void adcA_init() // function to initialize adc ports;
     AdcaRegs.ADCSOC0CTL.bit.TRIGSEL = 7; // Selecting the triggering source for SOC0 of ADC A, which is epwm2,ADCSOCA as set up above;
 
     //Selecting channel for each ADC:
-    AdcaRegs.ADCSOC0CTL.bit.CHSEL = 2; // Selecting ADCIN2 in our case will be ADCINA2(J3 29) as SOCA is set up;
+    AdcaRegs.ADCSOC0CTL.bit.CHSEL = 2; // Selecting ADCIN2 in our case will be ADCINA2(J3 29) for adc A;
 
     //Setting Acquisition prescalar for each:
     AdcaRegs.ADCSOC0CTL.bit.ACQPS = 99; // Aquisition Prescale of 99, so sample will be hold for (99+1 = 99) system clock cycles
@@ -85,25 +97,47 @@ void adcA_init() // function to initialize adc ports;
     AdcaRegs.ADCINTSEL1N2.bit.INT1E = 1;    // To enable Enable ADCINT1;
     AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;  // Clear interrupt flag
 
-    //ADC B for iL measurement;
+    EDIS;
+}
+void adcB_init()
+{
+    // ADC B for iL measurement;
+    // Using SOC0 event of ADC B for iL measurement;
+
+    EALLOW;
+
+    AdcbRegs.ADCCTL2.bit.SIGNALMODE = 0; // for single-ended adc mode;
+    AdcbRegs.ADCCTL2.bit.RESOLUTION = 0; // selecting 12-bit resolution for adc;
+    AdcbRegs.ADCCTL2.bit.PRESCALE = 14;  // Adc_clk = SYSCLK/8 = 200MHz/8 = 25MHz;
+
+    AdcbRegs.ADCCTL1.bit.ADCPWDNZ = 1;   //Powering up the adc;
+    volatile uint32_t i;
+    for(i = 0; i < 5000; i++) { }        // simple delay loop for getting adc turned on properly;
+
+    AdcbRegs.ADCSOC0CTL.bit.TRIGSEL = 7; // Selecting the triggering source for SOC0 of ADC B,
+                                         // which is epwm2,ADCSOCA as set in epwm2_init() function;
+
+    //Selecting channel for each ADC:
+    AdcbRegs.ADCSOC0CTL.bit.CHSEL = 2; // Selecting ADCIN2 in our case will be ADCINB2(J3 28) for adc B;
+
+    //Setting Acquisition prescalar for each:
+    AdcbRegs.ADCSOC0CTL.bit.ACQPS = 99; // Aquisition Prescale of 99, so sample will be hold for (99+1 = 99) system clock cycles
+    // i.e. 500ns for proper input;
+
+    // Now Enabling ADC interrupt 1 (ADCINT1) after conversion of SOC0, to do calculation with the converted value;
+    AdcbRegs.ADCINTSEL1N2.bit.INT1SEL = 0;  // Event EOC0 will trigger ADCINT1 interrupt;
+    AdcbRegs.ADCINTSEL1N2.bit.INT1E = 1;    // To enable Enable ADCINT1;
+    AdcbRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;  // Clear interrupt flag
 
     EDIS;
 }
 
 __interrupt void adca1_isr(void)
 {
-    Uint16 result = AdcaResultRegs.ADCRESULT0;  // Reading the result from adc0 result register;
-    Uint16 new_cmpa = (Uint32)result * 9999 / 4095;
-    EPwm2Regs.CMPA.bit.CMPA = new_cmpa;         // Updating the duty cycle, this will go in the shodow reg firstly;
-
-    AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;      // To Clear ADC interrupt flag;
-    PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;     // Acknowledge PIE group 1;
-
-
-    GpioDataRegs.GPBCLEAR.bit.GPIO61 = 1;      //Clearing test gpio pin after eoc;
+    while(AdcbRegs)
 }
 
-void picontrol(Uint32 Vref)
+void picontrol(void)
 {
     Uint16 Ipvbit = AdcaResultRegs.ADCRESULT0; // Ipv value, at ADCINA2; (J3 29)
     Uint16 ILbit = AdcbResultRegs.ADCRESULT0; // IL value, at ADCINB2; (J3 28)
