@@ -7,11 +7,11 @@
 //-------- Defining global variables --------//
 
 uint32_t SCALINGFACTOR = 100000;                        // For preventing floating numbers, scaling all the values for calculation.
-volatile uint32_t Ipv = 0;
-volatile uint32_t Vpv = 0;
+volatile int64_t Ipv = 0;
+volatile int64_t Vpv = 0;
 volatile uint32_t Vref = 6900000;                            // initially Vref will be Vpv at mppt, i.e. 69;
-volatile uint32_t IL = 0;
-volatile uint32_t error_iL_int = 0;                     // intergral current error, need to be preserved for accumulation overtime;
+volatile int64_t IL = 0;
+volatile int64_t error_iL_int = 0;                     // intergral current error, need to be preserved for accumulation overtime;
 
 //--------       Test pin set        --------//
 
@@ -160,15 +160,79 @@ void adcC_init() // Function to initialize ADCC for voltage sensor input (ADCINC
 //-----    mppt function    -----//
 
 void mppt(void)
-{
-    // Fetch ADC results from SOC0 of ADC A, B, and C using 32-bit variables
-    Uint32 Ipvbit = (Uint32)AdcaResultRegs.ADCRESULT0;  // Ipv from ADCINA2 (J3 29)
-    Uint32 ILbit  = (Uint32)AdcbResultRegs.ADCRESULT0;  // IL from ADCINB2 (J3 28)
-    Uint32 Vpvbit = (Uint32)AdccResultRegs.ADCRESULT0;  // Vpv from ADCINC2 (J3 27)
+{   // Get raw ADC values
+    uint16_t adc_Vpv = AdccResultRegs.ADCRESULT0;
+    uint16_t adc_Ipv = AdcaResultRegs.ADCRESULT0;
+    uint16_t adc_IL  = AdcbResultRegs.ADCRESULT0;
 
-    // Placeholder for MPPT logic
+    // Scale ADC readings
+    // 3V → 4095 counts
+    // Vpv: 3V = 500V → Scale = 50000000 (0.01V * 1e5)
+    // Ipv/IL: 3V = 30A → Scale = 3000000 (0.01A * 1e5)
 
+    Vpv = ((int64_t)adc_Vpv * 50000000LL) / 4095;  // Vpv in 0.01V (per 100k)
+    Ipv = (((int64_t)adc_Ipv - 2047) * 6000000LL) / 4095;
+    IL  = (((int64_t)adc_IL  - 2047) * 6000000LL) / 4095;
+    
+    // Constants
+    const uint64_t Vrefmax = 20000000;
+    const uint64_t Vrefmin = 0;
+    const int deltaVref = 10000;   // Equivalent to 0.1 steps
+
+    // Persistent/static state
+    static uint64_t Vold = 0;
+    static uint64_t Pold = 0;
+    static uint64_t Vrefold =6900000 ;
+
+    // Compute instantaneous power and deltas
+    int64_t P = Vpv * Ipv;
+    int64_t dV = (int64_t)Vpv - (int64_t)Vold;
+    int64_t dP = (int64_t)P - (int64_t)Pold;
+
+    Vref = Vrefold;
+
+    // Perturb and Observe logic
+    if (dP != 0)
+    {
+        if (dP < 0)
+        {
+            if (dV < 0)
+                Vref = Vrefold + deltaVref;
+            else
+                Vref = Vrefold - deltaVref;
+        }
+        else
+        {
+            if (dV < 0)
+                Vref = Vrefold - deltaVref;
+            else
+                Vref = Vrefold + deltaVref;
+        }
+    }
+    else
+    {
+        Vref = Vrefold;
+    }
+
+    // Bound Vref within min and max
+    if (Vref >= Vrefmax || Vref <= Vrefmin)
+    {
+        Vref = Vrefold;
+    }
+
+    // Update static values for next iteration
+    Vrefold = Vref;
+    Vold = Vpv;
+    Pold = P;
+
+    // Send Vref to PI controller (to control duty cycle)
+    // Example:
+    // pi_controller(Vref, Vpvbit);
+
+    // Optional: use ILbit for current monitoring, safety, or logging
 }
+
+
 
 //-----    pi control function    -----//
 
