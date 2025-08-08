@@ -7,11 +7,12 @@
 //-------- Defining global variables --------//
 
 uint32_t SCALINGFACTOR = 100000;                        // For preventing floating numbers, scaling all the values for calculation.
+volatile int64_t duty = 4999;
 volatile int64_t Ipv = 0;
 volatile int64_t Vpv = 0;
-volatile uint32_t Vref = 6900000;                            // initially Vref will be Vpv at mppt, i.e. 69;
+volatile uint32_t Vref = 6900000;                       // initially Vref will be Vpv at mppt, i.e. 69;
 volatile int64_t IL = 0;
-volatile int64_t error_iL_int = 0;                     // intergral current error, need to be preserved for accumulation overtime;
+volatile int64_t error_iL_int = 0;                      // intergral current error, need to be preserved for accumulation overtime;
 
 //--------       Test pin set        --------//
 
@@ -138,21 +139,21 @@ void adcC_init() // Function to initialize ADCC for voltage sensor input (ADCINC
     EALLOW;
 
     // ADCC for voltage sensor measurement;
-    AdccRegs.ADCCTL2.bit.SIGNALMODE = 0;  // Single-ended mode
-    AdccRegs.ADCCTL2.bit.RESOLUTION = 0;  // 12-bit resolution
-    AdccRegs.ADCCTL2.bit.PRESCALE = 14;   // ADC clock = SYSCLK / 8 = 25MHz
+    AdccRegs.ADCCTL2.bit.SIGNALMODE = 0;                // Single-ended mode
+    AdccRegs.ADCCTL2.bit.RESOLUTION = 0;                // 12-bit resolution
+    AdccRegs.ADCCTL2.bit.PRESCALE = 14;                 // ADC clock = SYSCLK / 8 = 25MHz
 
-    AdccRegs.ADCCTL1.bit.ADCPWDNZ = 1;    // Powering up ADCC
+    AdccRegs.ADCCTL1.bit.ADCPWDNZ = 1;                  // Powering up ADCC
 
     // Configure SOC0 of ADCC to be triggered by EPWM2 SOCA event
-    AdccRegs.ADCSOC0CTL.bit.TRIGSEL = 7;  // Trigger source: EPWM2 SOCA
-    AdccRegs.ADCSOC0CTL.bit.CHSEL = 2;    // Channel: ADCINC2 (J3 27);
-    AdccRegs.ADCSOC0CTL.bit.ACQPS = 99;   // Acquisition window: 100 SYSCLK cycles (500ns)
+    AdccRegs.ADCSOC0CTL.bit.TRIGSEL = 7;                // Trigger source: EPWM2 SOCA
+    AdccRegs.ADCSOC0CTL.bit.CHSEL = 2;                  // Channel: ADCINC2 (J3 27);
+    AdccRegs.ADCSOC0CTL.bit.ACQPS = 99;                 // Acquisition window: 100 SYSCLK cycles (500ns)
 
     // Configure ADCINT1 for ADCC
-    AdccRegs.ADCINTSEL1N2.bit.INT1SEL = 0;  // Interrupt on EOC0 (End of SOC0)
-    AdccRegs.ADCINTSEL1N2.bit.INT1E = 1;    // Enable ADCINT1
-    AdccRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;  // Clear ADCINT1 flag
+    AdccRegs.ADCINTSEL1N2.bit.INT1SEL = 0;              // Interrupt on EOC0 (End of SOC0)
+    AdccRegs.ADCINTSEL1N2.bit.INT1E = 1;                // Enable ADCINT1
+    AdccRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;              // Clear ADCINT1 flag
 
     EDIS;
 }
@@ -160,36 +161,37 @@ void adcC_init() // Function to initialize ADCC for voltage sensor input (ADCINC
 //-----    mppt function    -----//
 
 void mppt(void)
-{   // Get raw ADC values
+{
+    // Get raw ADC values
     uint16_t adc_Vpv = AdccResultRegs.ADCRESULT0;
     uint16_t adc_Ipv = AdcaResultRegs.ADCRESULT0;
     uint16_t adc_IL  = AdcbResultRegs.ADCRESULT0;
 
     // Scale ADC readings
-    // 3V → 4095 counts
-    // Vpv: 3V = 500V → Scale = 50000000 (0.01V * 1e5)
-    // Ipv/IL: 3V = 30A → Scale = 3000000 (0.01A * 1e5)
+    // 3V -> 4095 counts
+    // Vpv: 3V = 500V -> Scale = 50000000 (0.01V * 1e5)
+    // Ipv/IL: 3V = 30A -> Scale = 3000000 (0.01A * 1e5)
 
-    Vpv = ((int64_t)adc_Vpv * 50000000LL) / 4095;  // Vpv in 0.01V (per 100k)
-    Ipv = (((int64_t)adc_Ipv - 2047) * 6000000LL) / 4095;
-    IL  = (((int64_t)adc_IL  - 2047) * 6000000LL) / 4095;
-    
+    Vpv = ((int64_t)adc_Vpv * 30000000) / 4095;         // Vpv in 0.01V (per 100k)
+    Ipv = (((int64_t)adc_Ipv - 2047) * 6000000) / 4095;
+    IL  = (((int64_t)adc_IL  - 2047) * 6000000) / 4095;
+
     // Constants
-    const uint64_t Vrefmax = 20000000;
-    const uint64_t Vrefmin = 0;
-    const int deltaVref = 10000;   // Equivalent to 0.1 steps
+    const int64_t Vrefmax = 20000000;
+    const int64_t Vrefmin = 0;
+    const uint32_t deltaVref = 10000;                        // Equivalent to 0.1 steps
 
     // Persistent/static state
-    static uint64_t Vold = 0;
-    static uint64_t Pold = 0;
-    static uint64_t Vrefold =6900000 ;
+    static int64_t Vold = 0;
+    static int64_t Pold = 0;
+    static int64_t Vrefold = 6900000 ;
 
     // Compute instantaneous power and deltas
     int64_t P = Vpv * Ipv;
     int64_t dV = (int64_t)Vpv - (int64_t)Vold;
     int64_t dP = (int64_t)P - (int64_t)Pold;
 
-    Vref = Vrefold;
+    //Vref = Vrefold;
 
     // Perturb and Observe logic
     if (dP != 0)
@@ -232,55 +234,54 @@ void mppt(void)
     // Optional: use ILbit for current monitoring, safety, or logging
 }
 
-
-
 //-----    pi control function    -----//
 
 void pi_control(void)
 {
     // All values recieved are scaled by SCALINGFACTOR
-    uint32_t kp = 50000;                        // 0.5*100000;
-    uint32_t ki = 200000;                       // 2*100000;
-    int32_t error_iL = ((Vpv*Ipv)/Vref) - IL;  // error_i = ILref - IL;
-    error_iL_int += (error_iL/10000);           // error_iL_int += (error_iL*Ts); Ts = 1e-4;
+    uint32_t kp = 50000;                                // 0.5*100000;
+    uint32_t ki = 2000000;                               // 20*100000;
+    int32_t error_iL = ((Vpv*Ipv)/Vref) - IL;           // error_i = ILref - IL;
+    error_iL_int += (error_iL/10000);                   // error_iL_int += (error_iL*Ts); Ts = 1e-4;
 
     int64_t temp = ((int64_t)kp * error_iL) + ((int64_t)ki * error_iL_int); // For safety if temp becomes larger than 32 bit anyhow;
-    int32_t duty = ((int64_t)temp * 9999) / SCALINGFACTOR;
+            duty = ((int64_t)temp * 9999) / (SCALINGFACTOR*SCALINGFACTOR);
     // final_duty = duty * 9999 / 100000;
 
-    if(duty > 9500) // applying saturation on duty
+    if(duty > 9500)                                     // applying saturation on duty
     {
         duty = 9500;
     }
-    if(duty < 0) // if used unsigned value for duty and if duty become -ve then, the -ve value will be a large unsigned integer
-                 // then, duty would saturate to 0.95 instead of 0 which would be dangerous, so we make duty signed interger.
+    if(duty < 0)                                        // if used unsigned value for duty and if duty become -ve then, the -ve value
+                                                        // will be a large unsigned integer then, duty would saturate to 0.95
+                                                        // instead of 0 which would be dangerous, so we make duty signed interger.
     {
         duty = 0;
     }
-    EPwm2Regs.CMPA.bit.CMPA = duty; // Updating value in CMPA shadow register, this value will be used in next counting cycle;
+    EPwm2Regs.CMPA.bit.CMPA = duty;                     // Updating value in CMPA shadow register, this value will be used in next counting cycle;
 }
 
 //-----    ADCA EOC0 ISR function    -----//
 
-__interrupt void adca1_isr(void) // main calculations is done in this ISR;
+__interrupt void adca1_isr(void)                        // main calculations is done in this ISR;
 {
-    AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;      // Clear ADCINT1 flag for adc A;
+    AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;              // Clear ADCINT1 flag for adc A;
 
-    while(AdcbRegs.ADCINTFLG.bit.ADCINT1 == 0); // wait till ADC_B_INT1 interrupt is not triggered, this is triggered
-                                                // by our EOC0 event, i.e. when adc B has done its conversion;
-    AdcbRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;      // Clear ADCINT1 flag for adc B;
+    while(AdcbRegs.ADCINTFLG.bit.ADCINT1 == 0);         // wait till ADC_B_INT1 interrupt is not triggered, this is triggered
+                                                        // by our EOC0 event, i.e. when adc B has done its conversion;
+    AdcbRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;              // Clear ADCINT1 flag for adc B;
 
-    while(AdccRegs.ADCINTFLG.bit.ADCINT1 == 0); // wait till ADC_C_INT1 interrupt is not triggered, this is triggered
-                                                // by our EOC0 event, i.e. when adc C has done its conversion;
-    AdccRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;      // Clear ADCINT1 flag for adc C;
+    while(AdccRegs.ADCINTFLG.bit.ADCINT1 == 0);         // wait till ADC_C_INT1 interrupt is not triggered, this is triggered
+                                                        // by our EOC0 event, i.e. when adc C has done its conversion;
+    AdccRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;              // Clear ADCINT1 flag for adc C;
 
-    // mppt();                                     // Calling mppt function to give Vref; Also calculating values of Vpv,Ipv,IL in this only;
+    mppt();                                             // Calling mppt function to give Vref; Also calculating values of Vpv,Ipv,IL in this only;
 
-    pi_control();                                // Calling pi_control function to set req. Duty for pwm pulse;
+    pi_control();                                       // Calling pi_control function to set req. Duty for pwm pulse;
 
-    PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;     // Acknowledge PIE group 1;
+    PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;             // Acknowledge PIE group 1;
 
-    GpioDataRegs.GPBCLEAR.bit.GPIO61 = 1;      //Clearing test gpio pin after eoc;
+    GpioDataRegs.GPBCLEAR.bit.GPIO61 = 1;               //Clearing test gpio pin after eoc;
 }
 
 
@@ -298,10 +299,11 @@ void setup_interrupts()
     EDIS;
 }
 
+//-----    main function    -----//
 
 void main(void)
 {
-    InitSysCtrl();  // Must be called to initialize PLL & Timers, this sets 200MHz freq.
+    InitSysCtrl();                                      // Must be called to initialize PLL & Timers, this sets 200MHz freq.
     InitPieCtrl();
     InitPieVectTable();
 
@@ -312,7 +314,7 @@ void main(void)
     adcA_init();
     adcB_init();
     adcC_init();
-    volatile uint32_t i; // Simple delay for proper turning on of adcs;
+    volatile uint32_t i;                                // Simple delay for proper turning on of adcs;
     for(i = 0; i < 5000; i++) { }
 
     epwm2_init();
