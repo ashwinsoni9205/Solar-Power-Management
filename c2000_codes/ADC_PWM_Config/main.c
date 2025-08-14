@@ -5,15 +5,23 @@
 
 
 //-------- Defining global variables --------//
-
 uint32_t SCALINGFACTOR = 100000;                        // For preventing floating numbers, scaling all the values for calculation.
-volatile int64_t duty = 4999;
+volatile uint64_t duty = 4999;
+volatile uint32_t duty2 = 0;
 volatile int64_t Ipv = 0;
 volatile int64_t Vpv = 0;
 volatile uint32_t Vref = 6900000;                       // initially Vref will be Vpv at mppt, i.e. 69;
 volatile int64_t IL = 0;
 volatile int64_t error_iL_int = 0;                      // intergral current error, need to be preserved for accumulation overtime;
-
+int64_t error_iL;
+int64_t Pold = 0;
+int64_t Vold = 0;
+int64_t Vrefold = 0;
+volatile uint16_t first_time_entry = 0;
+int64_t P;
+int64_t dV;
+int64_t dP;
+int64_t temp;
 //--------       Test pin set        --------//
 
 __interrupt void epwm2_isr(void)                        // generating interrupt at start to set the test pin high for timing measurements;
@@ -177,19 +185,24 @@ void mppt(void)
     IL  = (((int64_t)adc_IL  - 2047) * 6000000) / 4095;
 
     // Constants
-    const int64_t Vrefmax = 20000000;
+    const int64_t Vrefmax = 10000000;
     const int64_t Vrefmin = 0;
     const uint32_t deltaVref = 10000;                        // Equivalent to 0.1 steps
 
     // Persistent/static state
-    static int64_t Vold = 0;
-    static int64_t Pold = 0;
-    static int64_t Vrefold = 6900000 ;
+
+    if(first_time_entry == 0)
+    {
+    first_time_entry = 1;
+    Pold = Vpv*Ipv;
+    Vold = Vpv;
+    Vrefold = 6900000;
+    }
 
     // Compute instantaneous power and deltas
-    int64_t P = Vpv * Ipv;
-    int64_t dV = (int64_t)Vpv - (int64_t)Vold;
-    int64_t dP = (int64_t)P - (int64_t)Pold;
+    P = Vpv * Ipv;
+    dV = Vpv - Vold;
+    dP = P - Pold;
 
     //Vref = Vrefold;
 
@@ -241,23 +254,30 @@ void pi_control(void)
     // All values recieved are scaled by SCALINGFACTOR
     uint32_t kp = 50000;                                // 0.5*100000;
     uint32_t ki = 2000000;                               // 20*100000;
-    int32_t error_iL = ((Vpv*Ipv)/Vref) - IL;           // error_i = ILref - IL;
+    error_iL = ((Vpv*Ipv)/Vref) - IL;           // error_i = ILref - IL;
     error_iL_int += (error_iL/10000);                   // error_iL_int += (error_iL*Ts); Ts = 1e-4;
 
-    int64_t temp = ((int64_t)kp * error_iL) + ((int64_t)ki * error_iL_int); // For safety if temp becomes larger than 32 bit anyhow;
-            duty = ((int64_t)temp * 9999) / (SCALINGFACTOR*SCALINGFACTOR);
+            temp = (kp * error_iL) + (ki * error_iL_int); // For safety if temp becomes larger than 32 bit anyhow;
+            if(temp < 0)
+            {
+                duty = 1000;
+            }
+            else{
+            duty = (temp * 9999) / (SCALINGFACTOR*SCALINGFACTOR);
     // final_duty = duty * 9999 / 100000;
 
     if(duty > 9500)                                     // applying saturation on duty
     {
         duty = 9500;
     }
-    if(duty < 0)                                        // if used unsigned value for duty and if duty become -ve then, the -ve value
+    else if(duty < 1000)                                        // if used unsigned value for duty and if duty become -ve then, the -ve value
                                                         // will be a large unsigned integer then, duty would saturate to 0.95
                                                         // instead of 0 which would be dangerous, so we make duty signed interger.
     {
-        duty = 0;
+        duty = 1000;
     }
+            }
+    duty2 = duty;
     EPwm2Regs.CMPA.bit.CMPA = duty;                     // Updating value in CMPA shadow register, this value will be used in next counting cycle;
 }
 
