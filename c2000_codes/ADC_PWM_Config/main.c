@@ -1,27 +1,41 @@
 #include "F28x_Project.h"                               // Contains basic device definitions
 #include "F2837xD_Examples.h"                           // Changed from F2837xS_Examples.h to F2837xD_Examples.h
 #include <stdint.h>
+#include <math.h>
 //#define LED_GPIO 4                                    // LED on GPIO4
 
 
 //-------- Defining global variables --------//
-uint32_t SCALINGFACTOR = 100000;                        // For preventing floating numbers, scaling all the values for calculation.
-volatile uint64_t duty = 4999;
-volatile uint32_t duty2 = 0;
-volatile int64_t Ipv = 0;
-volatile int64_t Vpv = 0;
-volatile uint32_t Vref = 6900000;                       // initially Vref will be Vpv at mppt, i.e. 69;
-volatile int64_t IL = 0;
-volatile int64_t error_iL_int = 0;                      // intergral current error, need to be preserved for accumulation overtime;
-int64_t error_iL;
-int64_t Pold = 0;
-int64_t Vold = 0;
-int64_t Vrefold = 0;
+//uint32_t SCALINGFACTOR = 100000;                        // For preventing floating numbers, scaling all the values for calculation.
+volatile float duty = 4999.0f;
+volatile float Ipv = 0.0f;
+volatile float Vpv = 0.0f;                       // Vpv will be in 0.01V, i.e. 1 count = 0.01V, so 100 counts = 1V;
+volatile float Vref = 69.0f;                       // initially Vref will be Vpv at mppt, i.e. 69;
+volatile float IL = 0.0f;
+float IL_continuous = 0.0f;
+float IL_nmin1 = 0.0f; // IL[n-1];
+float IL_nmin2 = 0.0f; // IL[n-2];
+volatile float error_iL_int = 0.0f;                      // intergral current error, need to be preserved for accumulation overtime;
+float error_iL=0.0f;
+float Pold = 0.0f;
+float Vold = 0.0f;
+float Vrefold = 0.0f;
 volatile uint16_t first_time_entry = 0;
-int64_t P;
-int64_t dV;
-int64_t dP;
-int64_t temp;
+float P=0.0f;
+float dV=0.0f;
+float dP=0.0f;
+float temp=0.0f;
+float Vrefmax = 200.0f;
+float kp = 0.2f;
+float ki = 20.0f;
+float windup = 0.0f;
+uint16_t count = 0;
+float Vpvsum = 0.0f;
+float Ipvsum = 0.0f;
+float ILsum = 0.0f;
+float P_deadband = 6.0f;
+float I_INT_MAX = 0.7f;
+float I_INT_MIN = -0.7f;
 //--------       Test pin set        --------//
 
 __interrupt void epwm2_isr(void)                        // generating interrupt at start to set the test pin high for timing measurements;
@@ -170,115 +184,119 @@ void adcC_init() // Function to initialize ADCC for voltage sensor input (ADCINC
 
 void mppt(void)
 {
-    // Get raw ADC values
+
     uint16_t adc_Vpv = AdccResultRegs.ADCRESULT0;
     uint16_t adc_Ipv = AdcaResultRegs.ADCRESULT0;
     uint16_t adc_IL  = AdcbResultRegs.ADCRESULT0;
 
-    // Scale ADC readings
-    // 3V -> 4095 counts
-    // Vpv: 3V = 500V -> Scale = 50000000 (0.01V * 1e5)
-    // Ipv/IL: 3V = 30A -> Scale = 3000000 (0.01A * 1e5)
+    Vpvsum += (((float)adc_Vpv) / 4095.0f)*300.0f;
+    Ipvsum += (((float)adc_Ipv - 2047.0f) / 4095.0f)*60.0f;
+    IL_nmin2 = IL_nmin1;
+    IL_nmin1 = IL_continuous;
+    IL_continuous = (((float)adc_IL  - 2047.0f)/ 4095.0f)*60.0f;
 
-    Vpv = ((int64_t)adc_Vpv * 30000000) / 4095;         // Vpv in 0.01V (per 100k)
-    Ipv = (((int64_t)adc_Ipv - 2047) * 6000000) / 4095;
-    IL  = (((int64_t)adc_IL  - 2047) * 6000000) / 4095;
+    ILsum +=  IL_continuous;
 
-    // Constants
-    const int64_t Vrefmax = 10000000;
-    const int64_t Vrefmin = 0;
-    const uint32_t deltaVref = 10000;                        // Equivalent to 0.1 steps
+    if(count >= 199){ // 50 vlaues : 0 to 49;
+        count = 0;
+    Vpv = Vpvsum/200.0f;
+    Ipv = Ipvsum/200.0f;
+    IL  = ILsum/200.0f;
 
-    // Persistent/static state
+    Vpvsum = 0;
+    Ipvsum = 0;
+    ILsum = 0;
+
+    }
+
+    const float Vrefmin = 0.5f;
+    const float dVref =0.1f;
+
 
     if(first_time_entry == 0)
     {
-    first_time_entry = 1;
+        first_time_entry = 1;
+        Vpv = (((float)adc_Vpv) / 4095.0f)*300.0f;
+        Ipv = (((float)adc_Ipv - 2047.0f) / 4095.0f)*60.0f;
+        IL = (((float)adc_IL  - 2047.0f)/ 4095.0f)*60.0f;
+
     Pold = Vpv*Ipv;
     Vold = Vpv;
-    Vrefold = 6900000;
+    Vrefold = 69.0f;
     }
 
-    // Compute instantaneous power and deltas
-    P = Vpv * Ipv;
-    dV = Vpv - Vold;
-    dP = P - Pold;
+    if(count == 0){ // running main mppt code with averaged values once in 50 cycles;
+                    // Now changes in Vref will be made once in 50 cycles;
+    dV=(Vpv-Vold);
+    P= Vpv * Ipv;
 
-    //Vref = Vrefold;
+    dP= (P-Pold);
 
-    // Perturb and Observe logic
-    if (dP != 0)
-    {
-        if (dP < 0)
-        {
-            if (dV < 0)
-                Vref = Vrefold + deltaVref;
-            else
-                Vref = Vrefold - deltaVref;
+    if(fabsf(dP) > P_deadband){ // since dP is float so its rare for it to become exactly 0, so used a deadband for comparison;
+        if(dP>0){
+            if(dV>0){
+                Vref=Vrefold + dVref;
+            }
+            else{
+                Vref=Vrefold - dVref;
+            }
         }
-        else
-        {
-            if (dV < 0)
-                Vref = Vrefold - deltaVref;
-            else
-                Vref = Vrefold + deltaVref;
+        else{
+            if(dV>0){
+                Vref=Vrefold - dVref;
+            }
+            else{
+                Vref=Vrefold + dVref;
+            }
         }
     }
-    else
-    {
+    else{
         Vref = Vrefold;
     }
 
-    // Bound Vref within min and max
-    if (Vref >= Vrefmax || Vref <= Vrefmin)
+    if(Vref>= Vrefmax){
+        Vref= Vrefmax;
+    }
+    else if(Vref <= Vrefmin)
     {
-        Vref = Vrefold;
+        Vref = Vrefmin;
     }
 
-    // Update static values for next iteration
-    Vrefold = Vref;
-    Vold = Vpv;
-    Pold = P;
-
-    // Send Vref to PI controller (to control duty cycle)
-    // Example:
-    // pi_controller(Vref, Vpvbit);
-
-    // Optional: use ILbit for current monitoring, safety, or logging
+    Vrefold=Vref;
+    Vold=Vpv;
+    Pold=P;
+    }
 }
 
 //-----    pi control function    -----//
 
-void pi_control(void)
+void pi_control(void) // running every pwm cycle;
 {
     // All values recieved are scaled by SCALINGFACTOR
-    uint32_t kp = 50000;                                // 0.5*100000;
-    uint32_t ki = 2000000;                               // 20*100000;
-    error_iL = ((Vpv*Ipv)/Vref) - IL;           // error_i = ILref - IL;
-    error_iL_int += (error_iL/10000);                   // error_iL_int += (error_iL*Ts); Ts = 1e-4;
+
+    error_iL = ((Vpv*Ipv)/Vref) + windup - ((IL_continuous*0.6f)+(IL_nmin1*0.25f)+(IL_nmin2*0.15f));       // error_i = ILref - IL_continuous_weighted_avg;
+    error_iL_int += (error_iL/10000.0f);                   // error_iL_int += (error_iL*Ts); Ts = 1e-4;
+            if (error_iL_int > I_INT_MAX){ // set the max to 0.7 and min to -0.7 in global variables;
+            error_iL_int = I_INT_MAX;}
+            else if (error_iL_int < I_INT_MIN){
+            error_iL_int = I_INT_MIN;}
 
             temp = (kp * error_iL) + (ki * error_iL_int); // For safety if temp becomes larger than 32 bit anyhow;
-            if(temp < 0)
+
+            if(temp > 0.95f)
             {
-                duty = 1000;
+                duty = 0.95f;
+            }
+            else if(temp < 0.1){
+            duty = 0.1f ;
             }
             else{
-            duty = (temp * 9999) / (SCALINGFACTOR*SCALINGFACTOR);
+                duty = temp;
+            }
     // final_duty = duty * 9999 / 100000;
 
-    if(duty > 9500)                                     // applying saturation on duty
-    {
-        duty = 9500;
-    }
-    else if(duty < 1000)                                        // if used unsigned value for duty and if duty become -ve then, the -ve value
-                                                        // will be a large unsigned integer then, duty would saturate to 0.95
-                                                        // instead of 0 which would be dangerous, so we make duty signed interger.
-    {
-        duty = 1000;
-    }
-            }
-    duty2 = duty;
-    EPwm2Regs.CMPA.bit.CMPA = duty;                     // Updating value in CMPA shadow register, this value will be used in next counting cycle;
+    windup = duty - temp;
+    EPwm2Regs.CMPA.bit.CMPA = (uint16_t)(duty*9999);                     // Updating value in CMPA shadow register, this value will be used in next counting cycle;
 }
 
 //-----    ADCA EOC0 ISR function    -----//
@@ -302,6 +320,7 @@ __interrupt void adca1_isr(void)                        // main calculations is 
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;             // Acknowledge PIE group 1;
 
     GpioDataRegs.GPBCLEAR.bit.GPIO61 = 1;               //Clearing test gpio pin after eoc;
+    count++;
 }
 
 
@@ -362,6 +381,6 @@ void main(void)
 //        GpioDataRegs.GPBTOGGLE.bit.GPIO61 = 1;
 //        // Simple delay loop (~500ms delay; adjust count as needed)
 //        volatile uint32_t j;
-//        for(j = 0; j < 500000; j++) { }
-    }
+//        for(j = 0; j < 500000; j++) { }
+        }
 }
