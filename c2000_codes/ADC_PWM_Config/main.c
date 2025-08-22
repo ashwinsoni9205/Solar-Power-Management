@@ -274,7 +274,7 @@ void pi_control(void) // running every pwm cycle;
 {
     // All values recieved are scaled by SCALINGFACTOR
 
-    error_iL = ((Vpv*Ipv)/Vref) + windup - ((IL_continuous*0.6f)+(IL_nmin1*0.25f)+(IL_nmin2*0.15f));       // error_i = ILref - IL_continuous_weighted_avg;
+    error_iL = ((Vpv*Ipv)/Vref) + windup - ((IL_continuous*0.8f)+(IL_nmin1*0.15f)+(IL_nmin2*0.05f));       // error_i = ILref - IL_continuous_weighted_avg;
     error_iL_int += (error_iL/10000.0f);                   // error_iL_int += (error_iL*Ts); Ts = 1e-4;
             if (error_iL_int > I_INT_MAX){ // set the max to 0.7 and min to -0.7 in global variables;
             error_iL_int = I_INT_MAX;}
