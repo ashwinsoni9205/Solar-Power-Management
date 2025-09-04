@@ -213,7 +213,7 @@ void bidirectional(void)
     windup = duty - duty_cycle;
 
 
-    //EPwm3Regs.CMPA.bit.CMPA = (Uint16)(duty * 9999);   // Update duty for EPWM3A
+    EPwm3Regs.CMPA.bit.CMPA = (Uint16)(duty * 9999);   // Update duty for EPWM3A
 
     // Step 7: Increment counter
     count++;
